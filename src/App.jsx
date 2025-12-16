@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Check, X, Calendar, Trash2, Edit2, RefreshCw, ChevronDown, ChevronRight, AlertCircle, ChevronLeft } from 'lucide-react';
+import { Plus, Check, X, Calendar, Trash2, Edit2, RefreshCw, ChevronDown, ChevronRight, AlertCircle, ChevronLeft, Unlink } from 'lucide-react';
 
 const API_BASE = 'https://payback.nedj.me';
 
@@ -45,6 +45,37 @@ export default function TaskManager() {
     deadline: ''
   });
 
+
+  // Initial load - fetch both projects and tasks totals
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [projectsRes, tasksRes] = await Promise.all([
+          fetch(`${API_BASE}/projects?offset=0&limit=1`),
+          fetch(`${API_BASE}/tasks?offset=0&limit=1`)
+        ]);
+
+        if (!projectsRes.ok || !tasksRes.ok) {
+          throw new Error('Failed to fetch initial data');
+        }
+
+        const projectsData = await projectsRes.json();
+        const tasksData = await tasksRes.json();
+
+        // Set totals from initial fetch
+        setProjectsTotal(projectsData.total || 0);
+        setTasksTotal(tasksData.total || 0);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
+  }, []); // Run only once on mount
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -227,20 +258,56 @@ export default function TaskManager() {
       return;
     }
     try {
+      const oldProjectId = editingTask?.project_id || null;
+      const newProjectId = taskForm.project_id || null;
+      
+      // Update task (without project_id, as linking is handled separately)
+      const taskUpdateBody = {
+        title: taskForm.title,
+        description: taskForm.description,
+        deadline: taskForm.deadline
+      };
+      
       const response = await fetch(`${API_BASE}/tasks/${editingTask.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(taskForm)
+        body: JSON.stringify(taskUpdateBody)
       });
 
       if (!response.ok) throw new Error('Failed to update task');
 
+      // Handle project linking/unlinking
+      if (oldProjectId !== newProjectId) {
+        // Unlink from old project if it existed
+        if (oldProjectId) {
+          const unlinkResponse = await fetch(`${API_BASE}/projects/${oldProjectId}/tasks/${editingTask.id}/unlink`, {
+            method: 'DELETE'
+          });
+          if (!unlinkResponse.ok) {
+            console.warn('Failed to unlink task from old project');
+          }
+        }
+        
+        // Link to new project if one is specified
+        if (newProjectId) {
+          const linkResponse = await fetch(`${API_BASE}/projects/${newProjectId}/tasks/${editingTask.id}/link`, {
+            method: 'POST'
+          });
+          if (!linkResponse.ok) {
+            throw new Error('Failed to link task to project');
+          }
+        }
+      }
+
       setShowTaskModal(false);
-      const updatedProjectId = editingTask?.project_id || taskForm.project_id;
       setEditingTask(null);
       setTaskForm({ title: '', description: '', deadline: '', project_id: '' });
       setTaskModalError(null);
-      await refreshData(updatedProjectId);
+      
+      // Refresh data for both old and new projects
+      if (oldProjectId) await refreshData(oldProjectId);
+      if (newProjectId && newProjectId !== oldProjectId) await refreshData(newProjectId);
+      await refreshData();
     } catch (err) {
       setTaskModalError(err.message);
     }
@@ -285,6 +352,23 @@ export default function TaskManager() {
       if (!response.ok) throw new Error('Failed to delete task');
       const projectId = findTaskProjectId(taskId);
       await refreshData(projectId);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleUnlinkTask = async (projectId, taskId) => {
+    try {
+      const response = await fetch(`${API_BASE}/projects/${projectId}/tasks/${taskId}/unlink`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) throw new Error('Failed to unlink task');
+      
+      // Refresh project tasks
+      await fetchProjectTasks(projectId);
+      // Also refresh main data if in tasks view
+      await refreshData();
     } catch (err) {
       setError(err.message);
     }
@@ -469,7 +553,7 @@ export default function TaskManager() {
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
                   Task Manager
                 </h1>
-                <p className="text-sm text-slate-500 mono">v1.0 // Production Ready</p>
+                <p className="text-sm text-slate-500 mono">v1.0 </p>
               </div>
             </div>
             
@@ -529,6 +613,14 @@ export default function TaskManager() {
 
           {activeView === 'tasks' && (
             <div className="flex bg-white rounded-xl p-1 shadow-sm border border-slate-200">
+              <button
+                onClick={() => setFilterCompleted(filterCompleted === false ? null : false)}
+                className={`filter-btn px-6 py-2 rounded-lg font-semibold transition-all ${
+                  filterCompleted === false ? 'active text-white' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Active
+              </button>
               <button
                 onClick={() => setFilterCompleted(filterCompleted === true ? null : true)}
                 className={`filter-btn px-6 py-2 rounded-lg font-semibold transition-all ${
@@ -768,7 +860,7 @@ export default function TaskManager() {
                             <p className="text-sm text-slate-500 mt-2">Loading tasks...</p>
                           </div>
                         ) : projectTasksList.length > 0 ? (
-                          <div className="space-y-2">
+                        <div className="space-y-2">
                             {projectTasksList.map(task => (
                             <div
                               key={task.id}
@@ -794,9 +886,17 @@ export default function TaskManager() {
                                   {formatDate(task.deadline)}
                                 </span>
                               )}
+                              
+                              <button
+                                onClick={() => handleUnlinkTask(project.id, task.id)}
+                                className="p-1.5 hover:bg-orange-50 rounded-lg transition-colors"
+                                title="Unlink task from project"
+                              >
+                                <Unlink className="w-4 h-4 text-orange-400" />
+                              </button>
                             </div>
                           ))}
-                          </div>
+                        </div>
                         ) : (
                           <div className="text-center py-4">
                             <p className="text-sm text-slate-500">No tasks in this project</p>
