@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Check, X, Calendar, Trash2, Edit2, RefreshCw, ChevronDown, ChevronRight, AlertCircle, ChevronLeft, Unlink } from 'lucide-react';
 
-const API_BASE = 'https://payback.nedj.me';
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://payback.nedj.me';
 
 export default function TaskManager() {
   const [projects, setProjects] = useState([]);
